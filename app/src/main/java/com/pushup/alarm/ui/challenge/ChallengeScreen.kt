@@ -29,7 +29,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.SwapCamera
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -259,7 +259,7 @@ fun CameraChallengeContent(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Default.SwapCamera,
+                    Icons.Default.Refresh,
                     contentDescription = "Switch Camera",
                     tint = Color.White,
                     modifier = Modifier.size(28.dp)
