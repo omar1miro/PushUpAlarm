@@ -3,6 +3,8 @@ package com.pushup.alarm.ui.challenge
 import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import androidx.camera.core.ImageAnalysis
@@ -28,7 +30,8 @@ data class ChallengeUiState(
     val pushUpState: PushUpState = PushUpState.UP,
     val lowLightWarning: Boolean = false,
     val label: String = "",
-    val alarmId: Long = -1L
+    val alarmId: Long = -1L,
+    val useFrontCamera: Boolean = false
 )
 
 @HiltViewModel
@@ -55,8 +58,14 @@ class ChallengeViewModel @Inject constructor(
             .build()
     )
 
+    private var isProcessingImage = false
+
     val imageAnalyzer = ImageAnalysis.Analyzer { imageProxy ->
-        processImage(imageProxy)
+        if (!_state.value.useMathFallback && !_state.value.isComplete) {
+            processImage(imageProxy)
+        } else {
+            imageProxy.close()
+        }
     }
 
     fun initialize(alarmId: Long, targetCount: Int, label: String) {
@@ -79,8 +88,27 @@ class ChallengeViewModel @Inject constructor(
         }
     }
 
+    fun setMathFallback(enabled: Boolean) {
+        _state.value = _state.value.copy(useMathFallback = enabled)
+    }
+
+    fun toggleCamera() {
+        _state.value = _state.value.copy(useFrontCamera = !_state.value.useFrontCamera)
+    }
+
     private fun processImage(imageProxy: ImageProxy) {
-        val mediaImage = imageProxy.image ?: return
+        if (isProcessingImage) {
+            imageProxy.close()
+            return
+        }
+
+        isProcessingImage = true
+        val mediaImage = imageProxy.image ?: run {
+            isProcessingImage = false
+            imageProxy.close()
+            return
+        }
+
         val image = InputImage.fromMediaImage(
             mediaImage,
             imageProxy.imageInfo.rotationDegrees
@@ -91,6 +119,7 @@ class ChallengeViewModel @Inject constructor(
                 pushUpDetector.processPose(pose, System.currentTimeMillis())
             }
             .addOnCompleteListener {
+                isProcessingImage = false
                 imageProxy.close()
             }
     }
@@ -113,16 +142,17 @@ class ChallengeViewModel @Inject constructor(
     fun checkMathAnswer(answer: String) {
         val num = answer.toIntOrNull() ?: return
         if (mathChallenge.checkAnswer(num)) {
+            val (current, total) = mathChallenge.getProgress()
             if (mathChallenge.isComplete()) {
                 _state.value = _state.value.copy(
-                    currentCount = _state.value.targetCount,
+                    currentCount = total,
                     isComplete = true
                 )
                 completeChallenge()
             } else {
-                val (current, total) = mathChallenge.getProgress()
                 _state.value = _state.value.copy(currentCount = current)
             }
+            vibrate()
         }
     }
 

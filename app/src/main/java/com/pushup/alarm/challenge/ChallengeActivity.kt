@@ -4,7 +4,13 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
+import android.media.SoundPool
+import android.net.Uri
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -22,12 +28,15 @@ class ChallengeActivity : ComponentActivity() {
 
     private val viewModel: ChallengeViewModel by viewModels()
     private var isLocked = false
+    private var ringtone: android.media.Ringtone? = null
+    private var vibrator: Vibrator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         hideSystemBars()
         keepScreenOn()
+        startAlarmSound()
 
         val alarmId = intent.getLongExtra(EXTRA_ALARM_ID, -1L)
         val pushUpCount = intent.getIntExtra(EXTRA_PUSH_UP_COUNT, 20)
@@ -47,6 +56,31 @@ class ChallengeActivity : ComponentActivity() {
         startLockTaskMode()
     }
 
+    private fun startAlarmSound() {
+        val alarmUri: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+
+        ringtone = RingtoneManager.getRingtone(applicationContext, alarmUri)
+        ringtone?.audioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        ringtone?.isLooping = true
+        ringtone?.play()
+
+        vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        val pattern = longArrayOf(0, 500, 200, 500, 200, 500)
+        vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
+    }
+
+    private fun stopAlarmSound() {
+        ringtone?.stop()
+        ringtone = null
+        vibrator?.cancel()
+        vibrator = null
+    }
+
     override fun onResume() {
         super.onResume()
         if (isLocked) {
@@ -57,7 +91,6 @@ class ChallengeActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         if (isLocked) {
-            // Bring back to foreground
             val intent = Intent(this, ChallengeActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
             }
@@ -108,6 +141,7 @@ class ChallengeActivity : ComponentActivity() {
     }
 
     private fun finishChallenge() {
+        stopAlarmSound()
         if (isLocked) {
             try {
                 stopLockTask()

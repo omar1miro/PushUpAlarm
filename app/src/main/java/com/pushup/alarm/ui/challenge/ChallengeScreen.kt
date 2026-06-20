@@ -11,6 +11,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.SwapCamera
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -40,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -83,19 +86,22 @@ fun ChallengeScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasCameraPermission = granted
-        if (!granted) {
-            // Fallback to math will be triggered by ViewModel observing permission
+        if (granted) {
+            viewModel.setMathFallback(false)
+        } else {
+            viewModel.setMathFallback(true)
         }
     }
 
     LaunchedEffect(Unit) {
-        if (!hasCameraPermission && !state.useMathFallback) {
+        if (!hasCameraPermission) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
     LaunchedEffect(state.isComplete) {
         if (state.isComplete) {
+            kotlinx.coroutines.delay(500)
             onChallengeComplete()
         }
     }
@@ -130,11 +136,38 @@ fun CameraChallengeContent(
     hasCameraPermission: Boolean,
     onPermissionRequest: () -> Unit
 ) {
+    val context = LocalContext.current
     val progress by animateFloatAsState(
-        targetValue = state.currentCount.toFloat() / state.targetCount.toFloat(),
+        targetValue = if (state.targetCount > 0) state.currentCount.toFloat() / state.targetCount.toFloat() else 0f,
         animationSpec = tween(300),
         label = "progress"
     )
+
+    var cameraSelector by remember { mutableStateOf(CameraSelector.DEFAULT_BACK_CAMERA) }
+    var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var imageAnalysisUseCase by remember { mutableStateOf<ImageAnalysis?>(null) }
+
+    fun bindCamera() {
+        val provider = cameraProvider ?: return
+        val analysis = imageAnalysisUseCase ?: return
+        try {
+            provider.unbindAll()
+            provider.bindToLifecycle(
+                lifecycleOwner,
+                cameraSelector,
+                analysis
+            )
+        } catch (_: Exception) {}
+    }
+
+    LaunchedEffect(state.useFrontCamera) {
+        cameraSelector = if (state.useFrontCamera) {
+            CameraSelector.DEFAULT_FRONT_CAMERA
+        } else {
+            CameraSelector.DEFAULT_BACK_CAMERA
+        }
+        bindCamera()
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (hasCameraPermission) {
@@ -144,7 +177,8 @@ fun CameraChallengeContent(
                     val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
 
                     cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
+                        val provider = cameraProviderFuture.get()
+                        cameraProvider = provider
 
                         val preview = androidx.camera.core.Preview.Builder()
                             .build()
@@ -153,17 +187,18 @@ fun CameraChallengeContent(
                         val imageAnalysis = ImageAnalysis.Builder()
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                             .build()
-                            .also {
-                                it.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
+                            .also { analysis ->
+                                analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
                                     viewModel.imageAnalyzer.analyze(imageProxy)
                                 }
+                                imageAnalysisUseCase = analysis
                             }
 
                         try {
-                            cameraProvider.unbindAll()
-                            cameraProvider.bindToLifecycle(
+                            provider.unbindAll()
+                            provider.bindToLifecycle(
                                 lifecycleOwner,
-                                CameraSelector.DEFAULT_BACK_CAMERA,
+                                cameraSelector,
                                 preview,
                                 imageAnalysis
                             )
@@ -198,7 +233,37 @@ fun CameraChallengeContent(
                     Button(onClick = onPermissionRequest) {
                         Text("Grant Permission")
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.setMathFallback(true) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White.copy(alpha = 0.1f)
+                        )
+                    ) {
+                        Text("Use Math Instead", color = Color.White.copy(alpha = 0.7f))
+                    }
                 }
+            }
+        }
+
+        // Camera switch button
+        if (hasCameraPermission) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .clickable { viewModel.toggleCamera() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.SwapCamera,
+                    contentDescription = "Switch Camera",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
             }
         }
 
@@ -207,7 +272,7 @@ fun CameraChallengeContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .padding(32.dp),
+                .padding(top = 48.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (state.label.isNotBlank()) {
@@ -279,8 +344,9 @@ fun MathChallengeContent(
 ) {
     var answer by remember { mutableStateOf("") }
     val problem = viewModel.mathChallenge.getCurrentProblem()
+    val (_, totalProblems) = viewModel.mathChallenge.getProgress()
     val progress by animateFloatAsState(
-        targetValue = state.currentCount.toFloat() / viewModel.mathChallenge.getProgress().second.toFloat(),
+        targetValue = if (totalProblems > 0) state.currentCount.toFloat() / totalProblems.toFloat() else 0f,
         animationSpec = tween(300),
         label = "mathProgress"
     )
@@ -379,7 +445,7 @@ fun MathChallengeContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            "Problem ${state.currentCount + 1} of ${viewModel.mathChallenge.getProgress().second}",
+            "Problem ${state.currentCount + 1} of $totalProblems",
             color = Color.White.copy(alpha = 0.5f),
             fontSize = 14.sp
         )
