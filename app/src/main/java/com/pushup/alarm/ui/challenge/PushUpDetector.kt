@@ -1,6 +1,5 @@
 package com.pushup.alarm.ui.challenge
 
-import com.google.mlkit.vision.common.PointF
 import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseLandmark
 
