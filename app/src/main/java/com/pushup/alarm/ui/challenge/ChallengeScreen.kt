@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -143,70 +144,61 @@ fun CameraChallengeContent(
         label = "progress"
     )
 
-    var cameraSelector by remember { mutableStateOf(CameraSelector.DEFAULT_BACK_CAMERA) }
+    val previewView = remember { PreviewView(context) }
+    val imageAnalysisExecutor = remember { Executors.newSingleThreadExecutor() }
     var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
-    var imageAnalysisUseCase by remember { mutableStateOf<ImageAnalysis?>(null) }
 
-    fun bindCamera() {
-        val provider = cameraProvider ?: return
-        val analysis = imageAnalysisUseCase ?: return
-        try {
-            provider.unbindAll()
-            provider.bindToLifecycle(
-                lifecycleOwner,
-                cameraSelector,
-                analysis
-            )
-        } catch (_: Exception) {}
+    LaunchedEffect(Unit) {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            cameraProvider = cameraProviderFuture.get()
+        }, ContextCompat.getMainExecutor(context))
     }
 
-    LaunchedEffect(state.useFrontCamera) {
-        cameraSelector = if (state.useFrontCamera) {
+    LaunchedEffect(state.useFrontCamera, cameraProvider) {
+        val provider = cameraProvider ?: return@LaunchedEffect
+        val selector = if (state.useFrontCamera) {
             CameraSelector.DEFAULT_FRONT_CAMERA
         } else {
             CameraSelector.DEFAULT_BACK_CAMERA
         }
-        bindCamera()
+
+        try {
+            provider.unbindAll()
+
+            val preview = androidx.camera.core.Preview.Builder()
+                .build()
+                .also { it.surfaceProvider = previewView.surfaceProvider }
+
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also { analysis ->
+                    analysis.setAnalyzer(imageAnalysisExecutor) { imageProxy ->
+                        viewModel.imageAnalyzer.analyze(imageProxy)
+                    }
+                }
+
+            provider.bindToLifecycle(
+                lifecycleOwner,
+                selector,
+                preview,
+                imageAnalysis
+            )
+        } catch (_: Exception) {}
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraProvider?.unbindAll()
+            imageAnalysisExecutor.shutdown()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (hasCameraPermission) {
             AndroidView(
-                factory = { ctx ->
-                    val previewView = PreviewView(ctx)
-                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-
-                    cameraProviderFuture.addListener({
-                        val provider = cameraProviderFuture.get()
-                        cameraProvider = provider
-
-                        val preview = androidx.camera.core.Preview.Builder()
-                            .build()
-                            .also { it.surfaceProvider = previewView.surfaceProvider }
-
-                        val imageAnalysis = ImageAnalysis.Builder()
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .build()
-                            .also { analysis ->
-                                analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                                    viewModel.imageAnalyzer.analyze(imageProxy)
-                                }
-                                imageAnalysisUseCase = analysis
-                            }
-
-                        try {
-                            provider.unbindAll()
-                            provider.bindToLifecycle(
-                                lifecycleOwner,
-                                cameraSelector,
-                                preview,
-                                imageAnalysis
-                            )
-                        } catch (_: Exception) {}
-                    }, ContextCompat.getMainExecutor(ctx))
-
-                    previewView
-                },
+                factory = { previewView },
                 modifier = Modifier.fillMaxSize()
             )
         } else {
